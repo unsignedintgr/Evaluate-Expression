@@ -2,6 +2,7 @@ $Console:Only
 
 '$include:'..\EvalExp.bi'
 
+print "This is QB" + EvalExp("(6 * 10) + 2^2")
 Do
     Line Input "Enter an Expression to Evaluate "; exp$
 
