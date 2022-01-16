@@ -7,7 +7,7 @@ A function for QB64 to calculate an expression by [@SteveMcNeill](https://github
 'including the file
 '$include: 'EvalExp.bi' <br>
 .... <br>
-print "This is QB" ExExp("(6*10)+2^2") 'This is an Example <br>
+print "This is QB" + EvalExp("(6 * 10) + 2^2") 'This is an Example <br>
 ....<br>
 '$include: 'EvalExp.bm'
 
