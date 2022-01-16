@@ -1,0 +1,871 @@
+
+'Steve Subs/Functins for _MATH support with CONST
+Function EvalExp$ (e$)
+    t$ = e$ 'So we preserve our original data, we parse a temp copy of it
+    PreParse t$
+
+
+    If Left$(t$, 5) = "ERROR" Then EvalExp$ = t$: Exit Function
+
+    'Deal with brackets first
+    exp$ = "(" + t$ + ")" 'Starting and finishing brackets for our parse routine.
+
+    Do
+        Eval_E = InStr(exp$, ")")
+        If Eval_E > 0 Then
+            c = 0
+            Do Until Eval_E - c <= 0
+                c = c + 1
+                If Eval_E Then
+                    If Mid$(exp$, Eval_E - c, 1) = "(" Then Exit Do
+                End If
+            Loop
+            s = Eval_E - c + 1
+            If s < 1 Then EvalExp$ = "ERROR -- BAD () Count": Exit Function
+            eval$ = " " + Mid$(exp$, s, Eval_E - s) + " " 'pad with a space before and after so the parser can pick up the values properly.
+
+            ParseExpression eval$
+            eval$ = LTrim$(RTrim$(eval$))
+            If Left$(eval$, 5) = "ERROR" Then EvalExp$ = eval$: Exit Function
+            exp$ = DWD(Left$(exp$, s - 2) + eval$ + Mid$(exp$, Eval_E + 1))
+            If Mid$(exp$, 1, 1) = "N" Then Mid$(exp$, 1) = "-"
+        End If
+    Loop Until Eval_E = 0
+    c = 0
+    Do
+        c = c + 1
+        Select Case Mid$(exp$, c, 1)
+            Case "0" TO "9", ".", "-" 'At this point, we should only have number values left.
+            Case Else: EvalExp$ = "ERROR - Unknown Diagnosis: (" + exp$ + ") ": Exit Function
+        End Select
+    Loop Until c >= Len(exp$)
+
+    EvalExp$ = exp$
+End Function
+
+Sub ParseExpression (exp$)
+    Dim num(10) As String
+    'PRINT exp$
+    exp$ = DWD(exp$)
+    'We should now have an expression with no () to deal with
+
+    For J = 1 To 250
+        lowest = 0
+        Do Until lowest = Len(exp$)
+            lowest = Len(exp$): OpOn = 0
+            For P = 1 To UBound(OName)
+                'Look for first valid operator
+                If J = PL(P) Then 'Priority levels match
+                    If Left$(exp$, 1) = "-" Then startAt = 2 Else startAt = 1
+                    op = InStr(startAt, exp$, OName(P))
+                    If op = 0 And Left$(OName(P), 1) = "_" And qb64prefix_set = 1 Then
+                        'try again without prefix
+                        op = InStr(startAt, exp$, Mid$(OName(P), 2))
+                        If op > 0 Then
+                            exp$ = Left$(exp$, op - 1) + "_" + Mid$(exp$, op)
+                            lowest = lowest + 1
+                        End If
+                    End If
+                    If op > 0 And op < lowest Then lowest = op: OpOn = P
+                End If
+            Next
+            If OpOn = 0 Then Exit Do 'We haven't gotten to the proper PL for this OP to be processed yet.
+            If Left$(exp$, 1) = "-" Then startAt = 2 Else startAt = 1
+            op = InStr(startAt, exp$, OName(OpOn))
+
+            numset = 0
+
+            '*** SPECIAL OPERATION RULESETS
+            If OName(OpOn) = "-" Then 'check for BOOLEAN operators before the -
+                Select Case Mid$(exp$, op - 3, 3)
+                    Case "NOT", "XOR", "AND", "EQV", "IMP"
+                        Exit Do 'Not an operator, it's a negative
+                End Select
+                If Mid$(exp$, op - 3, 2) = "OR" Then Exit Do 'Not an operator, it's a negative
+            End If
+
+            If op Then
+                c = Len(OName(OpOn)) - 1
+                Do
+                    Select Case Mid$(exp$, op + c + 1, 1)
+                        Case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "N": numset = -1 'Valid digit
+                        Case "-" 'We need to check if it's a minus or a negative
+                            If OName(OpOn) = "_PI" Or numset Then Exit Do
+                        Case ",": numset = 0
+                        Case Else 'Not a valid digit, we found our separator
+                            Exit Do
+                    End Select
+                    c = c + 1
+                Loop Until op + c >= Len(exp$)
+                E = op + c
+
+                c = 0
+                Do
+                    c = c + 1
+                    Select Case Mid$(exp$, op - c, 1)
+                        Case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "N" 'Valid digit
+                        Case "-" 'We need to check if it's a minus or a negative
+                            c1 = c
+                            bad = 0
+                            Do
+                                c1 = c1 + 1
+                                Select Case Mid$(exp$, op - c1, 1)
+                                    Case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "."
+                                        bad = -1
+                                        Exit Do 'It's a minus sign
+                                    Case Else
+                                        'It's a negative sign and needs to count as part of our numbers
+                                End Select
+                            Loop Until op - c1 <= 0
+                            If bad Then Exit Do 'We found our seperator
+                        Case Else 'Not a valid digit, we found our separator
+                            Exit Do
+                    End Select
+                Loop Until op - c <= 0
+                s = op - c
+                num(1) = Mid$(exp$, s + 1, op - s - 1) 'Get our first number
+                num(2) = Mid$(exp$, op + Len(OName(OpOn)), E - op - Len(OName(OpOn)) + 1) 'Get our second number
+                If Mid$(num(1), 1, 1) = "N" Then Mid$(num(1), 1) = "-"
+                If Mid$(num(2), 1, 1) = "N" Then Mid$(num(2), 1) = "-"
+                If num(1) = "-" Then
+                    num(3) = "N" + EvaluateNumbers(OpOn, num())
+                Else
+                    num(3) = EvaluateNumbers(OpOn, num())
+                End If
+                If Mid$(num(3), 1, 1) = "-" Then Mid$(num(3), 1) = "N"
+                If Left$(num(3), 5) = "ERROR" Then exp$ = num(3): Exit Sub
+                exp$ = LTrim$(N2S(DWD(Left$(exp$, s) + RTrim$(LTrim$(num(3))) + Mid$(exp$, E + 1))))
+            End If
+            op = 0
+        Loop
+    Next
+
+End Sub
+
+Function DWD$ (exp$) 'Deal With Duplicates
+    'To deal with duplicate operators in our code.
+    'Such as --  becomes a +
+    '++ becomes a +
+    '+- becomes a -
+    '-+ becomes a -
+    t$ = exp$
+    Do
+        bad = 0
+        Do
+            l = InStr(t$, "++")
+            If l Then t$ = Left$(t$, l - 1) + "+" + Mid$(t$, l + 2): bad = -1
+        Loop Until l = 0
+        Do
+            l = InStr(t$, "+-")
+            If l Then t$ = Left$(t$, l - 1) + "-" + Mid$(t$, l + 2): bad = -1
+        Loop Until l = 0
+        Do
+            l = InStr(t$, "-+")
+            If l Then t$ = Left$(t$, l - 1) + "-" + Mid$(t$, l + 2): bad = -1
+        Loop Until l = 0
+        Do
+            l = InStr(t$, "--")
+            If l Then t$ = Left$(t$, l - 1) + "+" + Mid$(t$, l + 2): bad = -1
+        Loop Until l = 0
+    Loop Until Not bad
+    DWD$ = t$
+End Function
+
+Sub PreParse (e$)
+    Dim f As _Float
+    Static TotalPrefixedPP_TypeMod As Long, TotalPP_TypeMod As Long
+
+    If PP_TypeMod(0) = "" Then
+        ReDim PP_TypeMod(100) As String, PP_ConvertedMod(100) As String 'Large enough to hold all values to begin with
+        PP_TypeMod(0) = "Initialized" 'Set so we don't do this section over and over, as we keep the values in shared memory.
+        'and the below is a conversion list so symbols don't get cross confused.
+        i = i + 1: PP_TypeMod(i) = "~`": PP_ConvertedMod(i) = "C_UBI" 'unsigned bit
+        i = i + 1: PP_TypeMod(i) = "~%%": PP_ConvertedMod(i) = "C_UBY" 'unsigned byte
+        i = i + 1: PP_TypeMod(i) = "~%&": PP_ConvertedMod(i) = "C_UOF" 'unsigned offset
+        i = i + 1: PP_TypeMod(i) = "~%": PP_ConvertedMod(i) = "C_UIN" 'unsigned integer
+        i = i + 1: PP_TypeMod(i) = "~&&": PP_ConvertedMod(i) = "C_UIF" 'unsigned integer64
+        i = i + 1: PP_TypeMod(i) = "~&": PP_ConvertedMod(i) = "C_ULO" 'unsigned long
+        i = i + 1: PP_TypeMod(i) = "`": PP_ConvertedMod(i) = "C_BI" 'bit
+        i = i + 1: PP_TypeMod(i) = "%%": PP_ConvertedMod(i) = "C_BY" 'byte
+        i = i + 1: PP_TypeMod(i) = "%&": PP_ConvertedMod(i) = "C_OF" 'offset
+        i = i + 1: PP_TypeMod(i) = "%": PP_ConvertedMod(i) = "C_IN" 'integer
+        i = i + 1: PP_TypeMod(i) = "&&": PP_ConvertedMod(i) = "C_IF" 'integer64
+        i = i + 1: PP_TypeMod(i) = "&": PP_ConvertedMod(i) = "C_LO" 'long
+        i = i + 1: PP_TypeMod(i) = "!": PP_ConvertedMod(i) = "C_SI" 'single
+        i = i + 1: PP_TypeMod(i) = "##": PP_ConvertedMod(i) = "C_FL" 'float
+        i = i + 1: PP_TypeMod(i) = "#": PP_ConvertedMod(i) = "C_DO" 'double
+        i = i + 1: PP_TypeMod(i) = "_RGB32": PP_ConvertedMod(i) = "C_RG" 'rgb32
+        i = i + 1: PP_TypeMod(i) = "_RGBA32": PP_ConvertedMod(i) = "C_RA" 'rgba32
+        i = i + 1: PP_TypeMod(i) = "_RED32": PP_ConvertedMod(i) = "C_RX" 'red32
+        i = i + 1: PP_TypeMod(i) = "_GREEN32": PP_ConvertedMod(i) = "C_GR" 'green32
+        i = i + 1: PP_TypeMod(i) = "_BLUE32": PP_ConvertedMod(i) = "C_BL" 'blue32
+        i = i + 1: PP_TypeMod(i) = "_ALPHA32": PP_ConvertedMod(i) = "C_AL" 'alpha32
+        TotalPrefixedPP_TypeMod = i
+        i = i + 1: PP_TypeMod(i) = "RGB32": PP_ConvertedMod(i) = "C_RG" 'rgb32
+        i = i + 1: PP_TypeMod(i) = "RGBA32": PP_ConvertedMod(i) = "C_RA" 'rgba32
+        i = i + 1: PP_TypeMod(i) = "RED32": PP_ConvertedMod(i) = "C_RX" 'red32
+        i = i + 1: PP_TypeMod(i) = "GREEN32": PP_ConvertedMod(i) = "C_GR" 'green32
+        i = i + 1: PP_TypeMod(i) = "BLUE32": PP_ConvertedMod(i) = "C_BL" 'blue32
+        i = i + 1: PP_TypeMod(i) = "ALPHA32": PP_ConvertedMod(i) = "C_AL" 'alpha32
+        TotalPP_TypeMod = i
+        ReDim _Preserve PP_TypeMod(i) As String, PP_ConvertedMod(i) As String 'And then resized to just contain the necessary space in memory
+    End If
+    t$ = e$
+
+    'First strip all spaces
+    t$ = ""
+    For i = 1 To Len(e$)
+        If Mid$(e$, i, 1) <> " " Then t$ = t$ + Mid$(e$, i, 1)
+    Next
+
+    t$ = UCase$(t$)
+    If t$ = "" Then e$ = "ERROR -- NULL string; nothing to evaluate": Exit Sub
+
+    'ERROR CHECK by counting our brackets
+    l = 0
+    Do
+        l = InStr(l + 1, t$, "("): If l Then c = c + 1
+    Loop Until l = 0
+    l = 0
+    Do
+        l = InStr(l + 1, t$, ")"): If l Then c1 = c1 + 1
+    Loop Until l = 0
+    If c <> c1 Then e$ = "ERROR -- Bad Parenthesis:" + Str$(c) + "( vs" + Str$(c1) + ")": Exit Sub
+
+    'Print t$: Sleep
+
+    'replace existing CONST values
+    sep$ = "+-*/\><=^" 'EDIT: Idk what was wrong with the code, but with `()' included in sep$, it didn't work
+    For i2 = 0 To constlast
+        thisConstName$ = constname(i2)
+        For replaceConstPass = 1 To 2
+            found = 0
+            Do
+                found = InStr(found + 1, UCase$(t$), thisConstName$)
+                If found Then
+                    If found > 1 Then
+                        If InStr(sep$, Mid$(t$, found - 1, 1)) = 0 Then _Continue
+                    End If
+                    If found + Len(thisConstName$) <= Len(t$) Then
+                        If InStr(sep$, Mid$(t$, found + Len(thisConstName$), 1)) = 0 Then _Continue
+                    End If
+                    t = consttype(i2)
+                    If t And ISSTRING Then
+                        r$ = conststring(i2)
+                        i4 = _InStrRev(r$, ",")
+                        r$ = Left$(r$, i4 - 1)
+                    Else
+                        If t And ISFLOAT Then
+                            r$ = Str$(constfloat(i2))
+                            r$ = N2S(r$)
+                        Else
+                            If t And ISUNSIGNED Then r$ = Str$(constuinteger(i2)) Else r$ = Str$(constinteger(i2))
+                        End If
+                    End If
+                    t$ = Left$(t$, found - 1) + _Trim$(r$) + Mid$(t$, found + Len(thisConstName$))
+                    'Print t$, found, consttype(i2): Sleep
+                End If
+            Loop Until found = 0
+            thisConstName$ = constname(i2) + constnamesymbol(i2)
+        Next
+    Next
+
+    'Print t$: Sleep
+
+    'Modify so that NOT will process properly
+    l = 0
+    Do
+        l = InStr(l + 1, t$, "NOT ")
+        If l Then
+            'We need to work magic on the statement so it looks pretty.
+            ' 1 + NOT 2 + 1 is actually processed as 1 + (NOT 2 + 1)
+            'Look for something not proper
+            l1 = InStr(l + 1, t$, "AND")
+            If l1 = 0 Or (InStr(l + 1, t$, "OR") > 0 And InStr(l + 1, t$, "OR") < l1) Then l1 = InStr(l + 1, t$, "OR")
+            If l1 = 0 Or (InStr(l + 1, t$, "XOR") > 0 And InStr(l + 1, t$, "XOR") < l1) Then l1 = InStr(l + 1, t$, "XOR")
+            If l1 = 0 Or (InStr(l + 1, t$, "EQV") > 0 And InStr(l + 1, t$, "EQV") < l1) Then l1 = InStr(l + 1, t$, "EQV")
+            If l1 = 0 Or (InStr(l + 1, t$, "IMP") > 0 And InStr(l + 1, t$, "IMP") < l1) Then l1 = InStr(l + 1, t$, "IMP")
+            If l1 = 0 Then l1 = Len(t$) + 1
+            t$ = Left$(t$, l - 1) + "(" + Mid$(t$, l, l1 - l) + ")" + Mid$(t$, l + l1 - l)
+            l = l + 3
+            'PRINT t$
+        End If
+    Loop Until l = 0
+
+    uboundPP_TypeMod = TotalPrefixedPP_TypeMod
+    If qb64prefix_set = 1 Then uboundPP_TypeMod = TotalPP_TypeMod
+    For j = 1 To uboundPP_TypeMod
+        l = 0
+        Do
+            l = InStr(l + 1, t$, PP_TypeMod(j))
+            If l = 0 Then Exit Do
+            i = 0: l1 = 0: l2 = 0: lo = Len(PP_TypeMod(j))
+            Do
+                If PL(i) > 10 Then
+                    l2 = _InStrRev(l, t$, OName$(i))
+                    If l2 > 0 And l2 > l1 Then l1 = l2
+                End If
+                i = i + lo
+            Loop Until i > UBound(PL)
+            l$ = Left$(t$, l1)
+            m$ = Mid$(t$, l1 + 1, l - l1 - 1)
+            r$ = PP_ConvertedMod(j) + Mid$(t$, l + lo)
+            If j > 15 Then
+                t$ = l$ + m$ + r$ 'replacement routine for commands which might get confused with others, like _RGB and _RGB32
+            Else
+                'the first 15 commands need to properly place the parenthesis around the value we want to convert.
+                t$ = l$ + "(" + m$ + ")" + r$
+            End If
+            l = l + 2 + Len(PP_TypeMod(j)) 'move forward from the length of the symbol we checked + the new "(" and  ")"
+        Loop
+    Next
+
+    'Check for bad operators before a ( bracket
+    l = 0
+    Do
+        l = InStr(l + 1, t$, "(")
+        If l > 0 And l > 2 Then 'Don't check the starting bracket; there's nothing before it.
+            good = 0
+            For i = 1 To UBound(OName)
+                m$ = Mid$(t$, l - Len(OName(i)), Len(OName(i)))
+                If m$ = OName(i) Then
+                    good = -1: Exit For 'We found an operator after our ), and it's not a CONST (like PI)
+                Else
+                    If Left$(OName(i), 1) = "_" And qb64prefix_set = 1 Then
+                        'try without prefix
+                        m$ = Mid$(t$, l - (Len(OName(i)) - 1), Len(OName(i)) - 1)
+                        If m$ = Mid$(OName(i), 2) Then good = -1: Exit For
+                    End If
+                End If
+            Next
+            If Not good Then e$ = "ERROR - Improper operations before (.": Exit Sub
+            l = l + 1
+        End If
+    Loop Until l = 0
+
+    'Check for bad operators after a ) bracket
+    l = 0
+    Do
+        l = InStr(l + 1, t$, ")")
+        If l > 0 And l < Len(t$) Then
+            good = 0
+            For i = 1 To UBound(OName)
+                m$ = Mid$(t$, l + 1, Len(OName(i)))
+
+                'Print m$, OName(i), t$: Sleep
+
+                If m$ = OName(i) Then
+                    good = -1: Exit For 'We found an operator after our ), and it's not a CONST (like PI
+                Else
+                    If Left$(OName(i), 1) = "_" And qb64prefix_set = 1 Then
+                        'try without prefix
+                        m$ = Mid$(t$, l + 1, Len(OName(i)) - 1)
+                        If m$ = Mid$(OName(i), 2) Then good = -1: Exit For
+                    End If
+                End If
+            Next
+            If Mid$(t$, l + 1, 1) = ")" Then good = -1
+            If Not good Then e$ = "ERROR - Improper operations after )." + m$ + Str$(good): Exit Sub
+            l = l + 1
+        End If
+    Loop Until l = 0 Or l = Len(t$) 'last symbol is a bracket
+
+    'Turn all &H (hex) numbers into decimal values for the program to process properly
+    l = 0
+    Do
+        l = InStr(t$, "&H")
+        If l Then
+            E = l + 1: finished = 0
+            Do
+                E = E + 1
+                comp$ = Mid$(t$, E, 1)
+                Select Case comp$
+                    Case "0" TO "9", "A" TO "F" 'All is good, our next digit is a number, continue to add to the hex$
+                    Case Else
+                        good = 0
+                        For i = 1 To UBound(OName)
+                            If Mid$(t$, E, Len(OName(i))) = OName(i) And PL(i) > 1 And PL(i) <= 250 Then good = -1: Exit For 'We found an operator after our ), and it's not a CONST (like PI)
+                        Next
+                        If Not good Then e$ = "ERROR - Improper &H value. (" + comp$ + ")": Exit Sub
+                        E = E - 1
+                        finished = -1
+                End Select
+            Loop Until finished Or E = Len(t$)
+            t$ = Left$(t$, l - 1) + LTrim$(RTrim$(Str$(Val(Mid$(t$, l, E - l + 1))))) + Mid$(t$, E + 1)
+        End If
+    Loop Until l = 0
+
+    'Turn all &B (binary) numbers into decimal values for the program to process properly
+    l = 0
+    Do
+        l = InStr(t$, "&B")
+        If l Then
+            E = l + 1: finished = 0
+            Do
+                E = E + 1
+                comp$ = Mid$(t$, E, 1)
+                Select Case comp$
+                    Case "0", "1" 'All is good, our next digit is a number, continue to add to the hex$
+                    Case Else
+                        good = 0
+                        For i = 1 To UBound(OName)
+                            If Mid$(t$, E, Len(OName(i))) = OName(i) And PL(i) > 1 And PL(i) <= 250 Then good = -1: Exit For 'We found an operator after our ), and it's not a CONST (like PI)
+                        Next
+                        If Not good Then e$ = "ERROR - Improper &B value. (" + comp$ + ")": Exit Sub
+                        E = E - 1
+                        finished = -1
+                End Select
+            Loop Until finished Or E = Len(t$)
+            bin$ = Mid$(t$, l + 2, E - l - 1)
+            For i = 1 To Len(bin$)
+                If Mid$(bin$, i, 1) = "1" Then f = f + 2 ^ (Len(bin$) - i)
+            Next
+            t$ = Left$(t$, l - 1) + LTrim$(RTrim$(Str$(f))) + Mid$(t$, E + 1)
+        End If
+    Loop Until l = 0
+
+
+    't$ = N2S(t$)
+    VerifyString t$
+    e$ = t$
+End Sub
+
+
+
+Sub VerifyString (t$)
+    'ERROR CHECK for unrecognized operations
+    j = 1
+    Do
+        comp$ = Mid$(t$, j, 1)
+        Select Case comp$
+            Case "0" TO "9", ".", "(", ")", ",": j = j + 1
+            Case Else
+                good = 0
+                extrachar = 0
+                For i = 1 To UBound(OName)
+                    If Mid$(t$, j, Len(OName(i))) = OName(i) Then
+                        good = -1: Exit For 'We found an operator after our ), and it's not a CONST (like PI)
+                    Else
+                        If Left$(OName(i), 1) = "_" And qb64prefix_set = 1 Then
+                            'try without prefix
+                            If Mid$(t$, j, Len(OName(i)) - 1) = Mid$(OName(i), 2) Then
+                                good = -1: extrachar = 1: Exit For
+                            End If
+                        End If
+                    End If
+                Next
+                If Not good Then t$ = "ERROR - Bad Operational value. (" + comp$ + ")": Exit Sub
+                j = j + (Len(OName(i)) - extrachar)
+        End Select
+    Loop Until j > Len(t$)
+End Sub
+
+Sub Set_OrderOfOperations
+    'PL sets our priortity level. 1 is highest to 65535 for the lowest.
+    'I used a range here so I could add in new priority levels as needed.
+    'OName ended up becoming the name of our commands, as I modified things.... Go figure!  LOL!
+    ReDim OName(10000) As String, PL(10000) As Integer
+    'Constants get evaluated first, with a Priority Level of 1
+
+    i = i + 1: OName(i) = "C_UOF": PL(i) = 5 'convert to unsigned offset
+    i = i + 1: OName(i) = "C_OF": PL(i) = 5 'convert to offset
+    i = i + 1: OName(i) = "C_UBY": PL(i) = 5 'convert to unsigned byte
+    i = i + 1: OName(i) = "C_BY": PL(i) = 5 'convert to byte
+    i = i + 1: OName(i) = "C_UIN": PL(i) = 5 'convert to unsigned integer
+    i = i + 1: OName(i) = "C_IN": PL(i) = 5 'convert to integer
+    i = i + 1: OName(i) = "C_UIF": PL(i) = 5 'convert to unsigned int64
+    i = i + 1: OName(i) = "C_IF": PL(i) = 5 'convert to int64
+    i = i + 1: OName(i) = "C_ULO": PL(i) = 5 'convert to unsigned long
+    i = i + 1: OName(i) = "C_LO": PL(i) = 5 'convert to long
+    i = i + 1: OName(i) = "C_SI": PL(i) = 5 'convert to single
+    i = i + 1: OName(i) = "C_FL": PL(i) = 5 'convert to float
+    i = i + 1: OName(i) = "C_DO": PL(i) = 5 'convert to double
+    i = i + 1: OName(i) = "C_UBI": PL(i) = 5 'convert to unsigned bit
+    i = i + 1: OName(i) = "C_BI": PL(i) = 5 'convert to bit
+
+    'Then Functions with PL 10
+    i = i + 1:: OName(i) = "_PI": PL(i) = 10
+    i = i + 1: OName(i) = "_ACOS": PL(i) = 10
+    i = i + 1: OName(i) = "_ASIN": PL(i) = 10
+    i = i + 1: OName(i) = "_ARCSEC": PL(i) = 10
+    i = i + 1: OName(i) = "_ARCCSC": PL(i) = 10
+    i = i + 1: OName(i) = "_ARCCOT": PL(i) = 10
+    i = i + 1: OName(i) = "_SECH": PL(i) = 10
+    i = i + 1: OName(i) = "_CSCH": PL(i) = 10
+    i = i + 1: OName(i) = "_COTH": PL(i) = 10
+    i = i + 1: OName(i) = "COS": PL(i) = 10
+    i = i + 1: OName(i) = "SIN": PL(i) = 10
+    i = i + 1: OName(i) = "TAN": PL(i) = 10
+    i = i + 1: OName(i) = "LOG": PL(i) = 10
+    i = i + 1: OName(i) = "EXP": PL(i) = 10
+    i = i + 1: OName(i) = "ATN": PL(i) = 10
+    i = i + 1: OName(i) = "_D2R": PL(i) = 10
+    i = i + 1: OName(i) = "_D2G": PL(i) = 10
+    i = i + 1: OName(i) = "_R2D": PL(i) = 10
+    i = i + 1: OName(i) = "_R2G": PL(i) = 10
+    i = i + 1: OName(i) = "_G2D": PL(i) = 10
+    i = i + 1: OName(i) = "_G2R": PL(i) = 10
+    i = i + 1: OName(i) = "ABS": PL(i) = 10
+    i = i + 1: OName(i) = "SGN": PL(i) = 10
+    i = i + 1: OName(i) = "INT": PL(i) = 10
+    i = i + 1: OName(i) = "_ROUND": PL(i) = 10
+    i = i + 1: OName(i) = "_CEIL": PL(i) = 10
+    i = i + 1: OName(i) = "FIX": PL(i) = 10
+    i = i + 1: OName(i) = "_SEC": PL(i) = 10
+    i = i + 1: OName(i) = "_CSC": PL(i) = 10
+    i = i + 1: OName(i) = "_COT": PL(i) = 10
+    i = i + 1: OName(i) = "ASC": PL(i) = 10
+    i = i + 1: OName(i) = "C_RG": PL(i) = 10 '_RGB32 converted
+    i = i + 1: OName(i) = "C_RA": PL(i) = 10 '_RGBA32 converted
+    i = i + 1: OName(i) = "_RGB": PL(i) = 10
+    i = i + 1: OName(i) = "_RGBA": PL(i) = 10
+    i = i + 1: OName(i) = "C_RX": PL(i) = 10 '_RED32 converted
+    i = i + 1: OName(i) = "C_GR": PL(i) = 10 ' _GREEN32 converted
+    i = i + 1: OName(i) = "C_BL": PL(i) = 10 '_BLUE32 converted
+    i = i + 1: OName(i) = "C_AL": PL(i) = 10 '_ALPHA32 converted
+    i = i + 1: OName(i) = "_RED": PL(i) = 10
+    i = i + 1: OName(i) = "_GREEN": PL(i) = 10
+    i = i + 1: OName(i) = "_BLUE": PL(i) = 10
+    i = i + 1: OName(i) = "_ALPHA": PL(i) = 10
+
+    'Exponents with PL 20
+    i = i + 1: OName(i) = "^": PL(i) = 20
+    i = i + 1: OName(i) = "SQR": PL(i) = 20
+    i = i + 1: OName(i) = "ROOT": PL(i) = 20
+    'Multiplication and Division PL 30
+    i = i + 1: OName(i) = "*": PL(i) = 30
+    i = i + 1: OName(i) = "/": PL(i) = 30
+    'Integer Division PL 40
+    i = i + 1: OName(i) = "\": PL(i) = 40
+    'MOD PL 50
+    i = i + 1: OName(i) = "MOD": PL(i) = 50
+    'Addition and Subtraction PL 60
+    i = i + 1: OName(i) = "+": PL(i) = 60
+    i = i + 1: OName(i) = "-": PL(i) = 60
+
+    'Relational Operators =, >, <, <>, <=, >=   PL 70
+    i = i + 1: OName(i) = "<>": PL(i) = 70 'These next three are just reversed symbols as an attempt to help process a common typo
+    i = i + 1: OName(i) = "><": PL(i) = 70
+    i = i + 1: OName(i) = "<=": PL(i) = 70
+    i = i + 1: OName(i) = ">=": PL(i) = 70
+    i = i + 1: OName(i) = "=<": PL(i) = 70 'I personally can never keep these things straight.  Is it < = or = <...
+    i = i + 1: OName(i) = "=>": PL(i) = 70 'Who knows, check both!
+    i = i + 1: OName(i) = ">": PL(i) = 70
+    i = i + 1: OName(i) = "<": PL(i) = 70
+    i = i + 1: OName(i) = "=": PL(i) = 70
+    'Logical Operations PL 80+
+    i = i + 1: OName(i) = "NOT": PL(i) = 80
+    i = i + 1: OName(i) = "AND": PL(i) = 90
+    i = i + 1: OName(i) = "OR": PL(i) = 100
+    i = i + 1: OName(i) = "XOR": PL(i) = 110
+    i = i + 1: OName(i) = "EQV": PL(i) = 120
+    i = i + 1: OName(i) = "IMP": PL(i) = 130
+    i = i + 1: OName(i) = ",": PL(i) = 1000
+
+    ReDim _Preserve OName(i) As String, PL(i) As Integer
+End Sub
+
+Function EvaluateNumbers$ (p, num() As String)
+    Dim n1 As _Float, n2 As _Float, n3 As _Float
+    'PRINT "EVALNUM:"; OName(p), num(1), num(2)
+
+    If _Trim$(num(1)) = "" Then num(1) = "0"
+
+    If PL(p) >= 20 And (Len(_Trim$(num(1))) = 0 Or Len(_Trim$(num(2))) = 0) Then
+        EvaluateNumbers$ = "ERROR - Missing operand": Exit Function
+    End If
+
+    If InStr(num(1), ",") Then
+        EvaluateNumbers$ = "ERROR - Invalid comma (" + num(1) + ")": Exit Function
+    End If
+    l2 = InStr(num(2), ",")
+    If l2 Then
+        Select Case OName(p) 'only certain commands should pass a comma value
+            Case "C_RG", "C_RA", "_RGB", "_RGBA", "_RED", "_GREEN", "C_BL", "_ALPHA"
+            Case Else
+                C$ = Mid$(num(2), l2)
+                num(2) = Left$(num(2), l2 - 1)
+        End Select
+    End If
+
+    Select Case PL(p) 'divide up the work so we want do as much case checking
+        Case 5 'Type conversions
+            'Note, these are special cases and work with the number BEFORE the command and not after
+            Select Case OName(p) 'Depending on our operator..
+                Case "C_UOF": n1~%& = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1~%&)))
+                Case "C_ULO": n1%& = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1%&)))
+                Case "C_UBY": n1~%% = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1~%%)))
+                Case "C_UIN": n1~% = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1~%)))
+                Case "C_BY": n1%% = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1%%)))
+                Case "C_IN": n1% = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1%)))
+                Case "C_UIF": n1~&& = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1~&&)))
+                Case "C_OF": n1~& = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1~&)))
+                Case "C_IF": n1&& = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1&&)))
+                Case "C_LO": n1& = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1&)))
+                Case "C_UBI": n1~` = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1~`)))
+                Case "C_BI": n1` = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1`)))
+                Case "C_FL": n1## = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1##)))
+                Case "C_DO": n1# = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1#)))
+                Case "C_SI": n1! = Val(num(1)): EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1!)))
+            End Select
+            Exit Function
+        Case 10 'functions
+            Select Case OName(p) 'Depending on our operator..
+                Case "_PI"
+                    n1 = 3.14159265358979323846264338327950288## 'Future compatable in case something ever stores extra digits for PI
+                    If num(2) <> "" Then n1 = n1 * Val(num(2))
+                Case "_ACOS": n1 = _Acos(Val(num(2)))
+                Case "_ASIN": n1 = _Asin(Val(num(2)))
+                Case "_ARCSEC": n1 = _Arcsec(Val(num(2)))
+                Case "_ARCCSC": n1 = _Arccsc(Val(num(2)))
+                Case "_ARCCOT": n1 = _Arccot(Val(num(2)))
+                Case "_SECH": n1 = _Sech(Val(num(2)))
+                Case "_CSCH": n1 = _Csch(Val(num(2)))
+                Case "_COTH": n1 = _Coth(Val(num(2)))
+                Case "C_RG"
+                    n$ = num(2)
+                    If n$ = "" Then EvaluateNumbers$ = "ERROR - Invalid null _RGB32": Exit Function
+                    c1 = InStr(n$, ",")
+                    If c1 Then c2 = InStr(c1 + 1, n$, ",")
+                    If c2 Then c3 = InStr(c2 + 1, n$, ",")
+                    If c3 Then c4 = InStr(c3 + 1, n$, ",")
+                    If c1 = 0 Then 'there's no comma in the command to parse.  It's a grayscale value
+                        n = Val(num(2))
+                        n1 = _RGB32(n, n, n)
+                    ElseIf c2 = 0 Then 'there's one comma and not 2.  It's grayscale with alpha.
+                        n = Val(Left$(num(2), c1))
+                        n2 = Val(Mid$(num(2), c1 + 1))
+                        n1 = _RGBA32(n, n, n, n2)
+                    ElseIf c3 = 0 Then 'there's two commas.  It's _RGB values
+                        n = Val(Left$(num(2), c1))
+                        n2 = Val(Mid$(num(2), c1 + 1))
+                        n3 = Val(Mid$(num(2), c2 + 1))
+                        n1 = _RGB32(n, n2, n3)
+                    ElseIf c4 = 0 Then 'there's three commas.  It's _RGBA values
+                        n = Val(Left$(num(2), c1))
+                        n2 = Val(Mid$(num(2), c1 + 1))
+                        n3 = Val(Mid$(num(2), c2 + 1))
+                        n4 = Val(Mid$(num(2), c3 + 1))
+                        n1 = _RGBA32(n, n2, n3, n4)
+                    Else 'we have more than three commas.  I have no idea WTH type of values got passed here!
+                        EvaluateNumbers$ = "ERROR - Invalid comma count (" + num(2) + ")": Exit Function
+                    End If
+                Case "C_RA"
+                    n$ = num(2)
+                    If n$ = "" Then EvaluateNumbers$ = "ERROR - Invalid null _RGBA32": Exit Function
+                    c1 = InStr(n$, ",")
+                    If c1 Then c2 = InStr(c1 + 1, n$, ",")
+                    If c2 Then c3 = InStr(c2 + 1, n$, ",")
+                    If c3 Then c4 = InStr(c3 + 1, n$, ",")
+                    If c3 = 0 Or c4 <> 0 Then EvaluateNumbers$ = "ERROR - Invalid comma count (" + num(2) + ")": Exit Function
+                    'we have to have 3 commas; not more, not less.
+                    n = Val(Left$(num(2), c1))
+                    n2 = Val(Mid$(num(2), c1 + 1))
+                    n3 = Val(Mid$(num(2), c2 + 1))
+                    n4 = Val(Mid$(num(2), c3 + 1))
+                    n1 = _RGBA32(n, n2, n3, n4)
+                Case "_RGB"
+                    n$ = num(2)
+                    If n$ = "" Then EvaluateNumbers$ = "ERROR - Invalid null _RGB": Exit Function
+                    c1 = InStr(n$, ",")
+                    If c1 Then c2 = InStr(c1 + 1, n$, ",")
+                    If c2 Then c3 = InStr(c2 + 1, n$, ",")
+                    If c3 Then c4 = InStr(c3 + 1, n$, ",")
+                    If c3 = 0 Or c4 <> 0 Then EvaluateNumbers$ = "ERROR - Invalid comma count (" + num(2) + "). _RGB requires 4 parameters for Red, Green, Blue, ScreenMode.": Exit Function
+                    'we have to have 3 commas; not more, not less.
+                    n = Val(Left$(num(2), c1))
+                    n2 = Val(Mid$(num(2), c1 + 1))
+                    n3 = Val(Mid$(num(2), c2 + 1))
+                    n4 = Val(Mid$(num(2), c3 + 1))
+                    Select Case n4
+                        Case 0 TO 2, 7 TO 13, 256, 32 'these are the good screen values
+                        Case Else
+                            EvaluateNumbers$ = "ERROR - Invalid Screen Mode (" + Str$(n4) + ")": Exit Function
+                    End Select
+                    t = _NewImage(1, 1, n4)
+                    n1 = _RGB(n, n2, n3, t)
+                    _FreeImage t
+                Case "_RGBA"
+                    n$ = num(2)
+                    If n$ = "" Then EvaluateNumbers$ = "ERROR - Invalid null _RGBA": Exit Function
+                    c1 = InStr(n$, ",")
+                    If c1 Then c2 = InStr(c1 + 1, n$, ",")
+                    If c2 Then c3 = InStr(c2 + 1, n$, ",")
+                    If c3 Then c4 = InStr(c3 + 1, n$, ",")
+                    If c4 Then c5 = InStr(c4 + 1, n$, ",")
+                    If c4 = 0 Or c5 <> 0 Then EvaluateNumbers$ = "ERROR - Invalid comma count (" + num(2) + "). _RGBA requires 5 parameters for Red, Green, Blue, Alpha, ScreenMode.": Exit Function
+                    'we have to have 4 commas; not more, not less.
+                    n = Val(Left$(num(2), c1))
+                    n2 = Val(Mid$(num(2), c1 + 1))
+                    n3 = Val(Mid$(num(2), c2 + 1))
+                    n4 = Val(Mid$(num(2), c3 + 1))
+                    n5 = Val(Mid$(num(2), c4 + 1))
+                    Select Case n5
+                        Case 0 TO 2, 7 TO 13, 256, 32 'these are the good screen values
+                        Case Else
+                            EvaluateNumbers$ = "ERROR - Invalid Screen Mode (" + Str$(n5) + ")": Exit Function
+                    End Select
+                    t = _NewImage(1, 1, n5)
+                    n1 = _RGBA(n, n2, n3, n4, t)
+                    _FreeImage t
+                Case "_RED", "_GREEN", "_BLUE", "_ALPHA"
+                    n$ = num(2)
+                    If n$ = "" Then EvaluateNumbers$ = "ERROR - Invalid null " + OName(p): Exit Function
+                    c1 = InStr(n$, ",")
+                    If c1 = 0 Then EvaluateNumbers$ = "ERROR - " + OName(p) + " requires 2 parameters for Color, ScreenMode.": Exit Function
+                    If c1 Then c2 = InStr(c1 + 1, n$, ",")
+                    If c2 Then EvaluateNumbers$ = "ERROR - " + OName(p) + " requires 2 parameters for Color, ScreenMode.": Exit Function
+                    n = Val(Left$(num(2), c1))
+                    n2 = Val(Mid$(num(2), c1 + 1))
+                    Select Case n2
+                        Case 0 TO 2, 7 TO 13, 256, 32 'these are the good screen values
+                        Case Else
+                            EvaluateNumbers$ = "ERROR - Invalid Screen Mode (" + Str$(n2) + ")": Exit Function
+                    End Select
+                    t = _NewImage(1, 1, n4)
+                    Select Case OName(p)
+                        Case "_RED": n1 = _Red(n, t)
+                        Case "_BLUE": n1 = _Blue(n, t)
+                        Case "_GREEN": n1 = _Green(n, t)
+                        Case "_ALPHA": n1 = _Alpha(n, t)
+                    End Select
+                    _FreeImage t
+                Case "C_RX", "C_GR", "C_BL", "C_AL"
+                    n$ = num(2)
+                    If n$ = "" Then EvaluateNumbers$ = "ERROR - Invalid null " + OName(p): Exit Function
+                    n = Val(num(2))
+                    Select Case OName(p)
+                        Case "C_RX": n1 = _Red32(n)
+                        Case "C_BL": n1 = _Blue32(n)
+                        Case "C_GR": n1 = _Green32(n)
+                        Case "C_AL": n1 = _Alpha32(n)
+                    End Select
+                Case "COS": n1 = Cos(Val(num(2)))
+                Case "SIN": n1 = Sin(Val(num(2)))
+                Case "TAN": n1 = Tan(Val(num(2)))
+                Case "LOG": n1 = Log(Val(num(2)))
+                Case "EXP": n1 = Exp(Val(num(2)))
+                Case "ATN": n1 = Atn(Val(num(2)))
+                Case "_D2R": n1 = 0.0174532925 * (Val(num(2)))
+                Case "_D2G": n1 = 1.1111111111 * (Val(num(2)))
+                Case "_R2D": n1 = 57.2957795 * (Val(num(2)))
+                Case "_R2G": n1 = 0.015707963 * (Val(num(2)))
+                Case "_G2D": n1 = 0.9 * (Val(num(2)))
+                Case "_G2R": n1 = 63.661977237 * (Val(num(2)))
+                Case "ABS": n1 = Abs(Val(num(2)))
+                Case "SGN": n1 = Sgn(Val(num(2)))
+                Case "INT": n1 = Int(Val(num(2)))
+                Case "_ROUND": n1 = _Round(Val(num(2)))
+                Case "_CEIL": n1 = _Ceil(Val(num(2)))
+                Case "FIX": n1 = Fix(Val(num(2)))
+                Case "_SEC": n1 = _Sec(Val(num(2)))
+                Case "_CSC": n1 = _Csc(Val(num(2)))
+                Case "_COT": n1 = _Cot(Val(num(2)))
+            End Select
+        Case 20 TO 60 'Math Operators
+            Select Case OName(p) 'Depending on our operator..
+                Case "^": n1 = Val(num(1)) ^ Val(num(2))
+                Case "SQR": n1 = Sqr(Val(num(2)))
+                Case "ROOT"
+                    n1 = Val(num(1)): n2 = Val(num(2))
+                    If n2 = 1 Then EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1))): Exit Function
+                    If n1 < 0 And n2 >= 1 Then sign = -1: n1 = -n1 Else sign = 1
+                    n3 = 1## / n2
+                    If n3 <> Int(n3) And n2 < 1 Then sign = Sgn(n1): n1 = Abs(n1)
+                    n1 = sign * (n1 ^ n3)
+                Case "*": n1 = Val(num(1)) * Val(num(2))
+                Case "/"
+                    If Val(num(2)) <> 0 Then
+                        n1 = Val(num(1)) / Val(num(2))
+                    Else
+                        EvaluateNumbers$ = "ERROR - Division By Zero"
+                        Exit Function
+                    End If
+                Case "\"
+                    If Val(num(2)) <> 0 Then
+                        n1 = Val(num(1)) \ Val(num(2))
+                    Else
+                        EvaluateNumbers$ = "ERROR - Division By Zero"
+                        Exit Function
+                    End If
+                Case "MOD"
+                    If Val(num(2)) <> 0 Then
+                        n1 = Val(num(1)) Mod Val(num(2))
+                    Else
+                        EvaluateNumbers$ = "ERROR - Division By Zero"
+                        Exit Function
+                    End If
+                Case "+": n1 = Val(num(1)) + Val(num(2))
+                Case "-":
+                    n1 = Val(num(1)) - Val(num(2))
+            End Select
+        Case 70 'Relational Operators =, >, <, <>, <=, >=
+            Select Case OName(p) 'Depending on our operator..
+                Case "=": n1 = Val(num(1)) = Val(num(2))
+                Case ">": n1 = Val(num(1)) > Val(num(2))
+                Case "<": n1 = Val(num(1)) < Val(num(2))
+                Case "<>", "><": n1 = Val(num(1)) <> Val(num(2))
+                Case "<=", "=<": n1 = Val(num(1)) <= Val(num(2))
+                Case ">=", "=>": n1 = Val(num(1)) >= Val(num(2))
+            End Select
+        Case Else 'a value we haven't processed elsewhere
+            Select Case OName(p) 'Depending on our operator..
+                Case "NOT": n1 = Not Val(num(2))
+                Case "AND": n1 = Val(num(1)) And Val(num(2))
+                Case "OR": n1 = Val(num(1)) Or Val(num(2))
+                Case "XOR": n1 = Val(num(1)) Xor Val(num(2))
+                Case "EQV": n1 = Val(num(1)) Eqv Val(num(2))
+                Case "IMP": n1 = Val(num(1)) Imp Val(num(2))
+            End Select
+    End Select
+
+    EvaluateNumbers$ = RTrim$(LTrim$(Str$(n1))) + C$
+End Function
+
+Function N2S$ (exp$) 'scientific Notation to String
+
+    t$ = LTrim$(RTrim$(exp$))
+    If Left$(t$, 1) = "-" Or Left$(t$, 1) = "N" Then sign$ = "-": t$ = Mid$(t$, 2)
+
+    dp = InStr(t$, "D+"): dm = InStr(t$, "D-")
+    ep = InStr(t$, "E+"): em = InStr(t$, "E-")
+    check1 = Sgn(dp) + Sgn(dm) + Sgn(ep) + Sgn(em)
+    If check1 < 1 Or check1 > 1 Then N2S = exp$: Exit Function 'If no scientic notation is found, or if we find more than 1 type, it's not SN!
+
+    Select Case l 'l now tells us where the SN starts at.
+        Case Is < dp: l = dp
+        Case Is < dm: l = dm
+        Case Is < ep: l = ep
+        Case Is < em: l = em
+    End Select
+
+    l$ = Left$(t$, l - 1) 'The left of the SN
+    r$ = Mid$(t$, l + 1): r&& = Val(r$) 'The right of the SN, turned into a workable long
+
+
+    If InStr(l$, ".") Then 'Location of the decimal, if any
+        If r&& > 0 Then
+            r&& = r&& - Len(l$) + 2
+        Else
+            r&& = r&& + 1
+        End If
+        l$ = Left$(l$, 1) + Mid$(l$, 3)
+    End If
+
+    Select Case r&&
+        Case 0 'what the heck? We solved it already?
+            'l$ = l$
+        Case Is < 0
+            For i = 1 To -r&&
+                l$ = "0" + l$
+            Next
+            l$ = "0." + l$
+        Case Else
+            For i = 1 To r&&
+                l$ = l$ + "0"
+            Next
+    End Select
+
+    N2S$ = sign$ + l$
+End Function
+
